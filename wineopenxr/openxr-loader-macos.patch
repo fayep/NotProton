@@ -1,0 +1,27 @@
+The Khronos OpenXR loader only reads the per-user active_runtime.json on Linux; on macOS
+it then finds no runtime unless XR_RUNTIME_JSON is set, which NotProton's run script does not
+pass to Wine. This lets macOS use the same XDG lookup (~/.config/openxr/1/active_runtime.json).
+Applied to KhronosGroup/OpenXR-SDK-Source at 3ed64d0f9bb680f24b80a085091e5c8fab38f7b7.
+
+diff --git a/src/loader/manifest_file.cpp b/src/loader/manifest_file.cpp
+index 0a246ed..5d38754 100644
+--- a/src/loader/manifest_file.cpp
++++ b/src/loader/manifest_file.cpp
+@@ -251,7 +251,7 @@ static void ReadDataFilesInSearchPaths(const std::string &override_env_var, cons
+     AddFilesInPath(search_path, true, manifest_files);
+ }
+ 
+-#ifdef XR_OS_LINUX
++#if defined(XR_OS_LINUX) || defined(XR_OS_APPLE)
+ 
+ // Get an XDG environment variable with a $HOME-relative default
+ static std::string GetXDGEnvHome(const char *name, const char *fallback_path) {
+@@ -672,7 +672,7 @@ XrResult RuntimeManifestFile::FindManifestFiles(const std::string &openxr_comman
+         filename = filenames[0];
+         LoaderLogger::LogInfoMessage(openxr_command,
+                                      "RuntimeManifestFile::FindManifestFiles - using registry-specified runtime file " + filename);
+-#elif defined(XR_OS_LINUX)
++#elif defined(XR_OS_LINUX) || defined(XR_OS_APPLE)
+ 
+         if (!FindXDGConfigFile("openxr/", XR_VERSION_MAJOR(XR_CURRENT_API_VERSION), filename)) {
+             LoaderLogger::LogErrorMessage(
