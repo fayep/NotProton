@@ -13,6 +13,11 @@ https://github.com/ValveSoftware/Proton/blob/proton_11.0/lsteamclient/LICENSE
 steam-shim is a port of steam_helper from Proton 9.0, which Valve released under
 BSD-3-Clause.
 
+wineopenxr is fetched from Valve's Proton at a pinned commit; only crossover.patch is
+tracked here. Proton covers that directory with LICENSE.proton (BSD-3-Clause), see
+https://github.com/ValveSoftware/Proton/blob/164e0ccd2ea2b1ec2e5d08dc97f65b184c2539ca/LICENSE.proton
+and its generated thunk files carry Apache-2.0 OR MIT.
+
 Steam-shim compiles against Steamworks SDK headers. Those headers are licensed
 under the Steamworks SDK license whenever they are used.
 

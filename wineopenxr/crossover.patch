@@ -1,0 +1,273 @@
+Proton's wineopenxr on CrossOver's Wine, which lacks three things Proton's carries:
+
+- __wine_set_unix_env and winevulkan's VK_WINE_openxr_device_extensions stand-in, which
+  hand the runtime's device extensions to every VkDevice. CrossOver's DXVK asks for them
+  itself through __wineopenxr_GetVulkanDeviceExtensions, which now returns the real list.
+- winevulkan's instance and device creation callbacks, which xrCreateVulkanInstanceKHR and
+  xrCreateVulkanDeviceKHR need, so XR_KHR_vulkan_enable2 is not offered.
+
+Two fixes that only show with a runtime that needs no Vulkan extensions of its own: an empty
+name is no longer parsed out of the list, and the registry DWORDs are not read with the
+string's length.
+
+--- a/openxr.c
++++ b/openxr.c
+@@ -142,10 +142,10 @@
+                                                                createInfo, swapchain);
+ }
+ 
+-XrResult WINAPI wine_xrEnumerateInstanceExtensionProperties(const char *layerName,
+-                                                            uint32_t propertyCapacityInput,
+-                                                            uint32_t *propertyCountOutput,
+-                                                            XrExtensionProperties *properties) {
++static XrResult enumerate_instance_extensions(const char *layerName,
++                                              uint32_t propertyCapacityInput,
++                                              uint32_t *propertyCountOutput,
++                                              XrExtensionProperties *properties) {
+   uint32_t i, j, dst, count, extra_extensions_count;
+   XrResult res;
+ 
+@@ -218,6 +218,39 @@
+     return NULL;
+ }
+ 
++
++/* CrossOver's winevulkan has no instance and device creation callbacks, which
++ * xrCreateVulkanInstanceKHR and xrCreateVulkanDeviceKHR need, so
++ * XR_KHR_vulkan_enable2 is not offered. */
++XrResult WINAPI wine_xrEnumerateInstanceExtensionProperties(const char *layerName,
++                                                            uint32_t propertyCapacityInput,
++                                                            uint32_t *propertyCountOutput,
++                                                            XrExtensionProperties *properties) {
++  XrExtensionProperties *all;
++  uint32_t i, n = 0, kept = 0;
++  XrResult res;
++
++  res = enumerate_instance_extensions(layerName, 0, &n, NULL);
++  if (res != XR_SUCCESS) return res;
++  if (!(all = calloc(n, sizeof(*all)))) return XR_ERROR_OUT_OF_MEMORY;
++  for (i = 0; i < n; ++i) all[i].type = XR_TYPE_EXTENSION_PROPERTIES;
++  res = enumerate_instance_extensions(layerName, n, &n, all);
++  if (res == XR_SUCCESS) {
++    for (i = 0; i < n; ++i)
++      if (strcmp(all[i].extensionName, "XR_KHR_vulkan_enable2")) all[kept++] = all[i];
++    *propertyCountOutput = kept;
++    if (propertyCapacityInput && propertyCapacityInput < kept) res = XR_ERROR_SIZE_INSUFFICIENT;
++    else if (propertyCapacityInput) {
++      for (i = 0; i < kept; ++i) {
++        memcpy(properties[i].extensionName, all[i].extensionName, sizeof(all[i].extensionName));
++        properties[i].extensionVersion = all[i].extensionVersion;
++      }
++    }
++  }
++  free(all);
++  return res;
++}
++
+ XrResult WINAPI wine_xrGetVulkanGraphicsDeviceKHR(XrInstance instance,
+                                                   XrSystemId systemId,
+                                                   VkInstance vkInstance,
+--- a/openxr_loader.c
++++ b/openxr_loader.c
+@@ -55,46 +55,22 @@
+ }
+ 
+ static void parse_extensions(const char *in, uint32_t *out_count, char ***out_strs) {
+-  char *iter, *start;
+-  char **list, *str = strdup(in);
+-  uint32_t extension_count = 0, o = 0;
++  /* Skips empty names: a runtime may have no extensions of its own, and the list it
++   * returns is then "" with others appended after a space. */
++  char *str = strdup(in), *tok, *save = NULL;
++  char **list = malloc((strlen(in) / 2 + 1) * sizeof(char *));
++  uint32_t o = 0;
+ 
+-  iter = str;
+-  while (*iter) {
+-    if (*iter++ == ' ') {
+-      extension_count++;
+-    }
++  for (tok = strtok_s(str, " ", &save); tok; tok = strtok_s(NULL, " ", &save)) {
++    list[o++] = strdup(tok);
++    TRACE("added %s to list\n", list[o - 1]);
+   }
+-  /* count the one ending in NUL */
+-  if (iter != str) {
+-    extension_count++;
++  free(str);
++  if (!o) {
++    free(list);
++    list = NULL;
+   }
+-  if (!extension_count) {
+-    *out_count = 0;
+-    *out_strs = NULL;
+-    return;
+-  }
+-
+-  list = malloc(extension_count * sizeof(char *));
+-
+-  start = iter = str;
+-  do {
+-    if (*iter == ' ') {
+-      *iter = 0;
+-      list[o++] = strdup(start);
+-      TRACE("added %s to list\n", list[o - 1]);
+-      iter++;
+-      start = iter;
+-    } else if (*iter == 0) {
+-      list[o++] = strdup(start);
+-      TRACE("added %s to list\n", list[o - 1]);
+-      break;
+-    } else {
+-      iter++;
+-    }
+-  } while (1);
+-
+-  *out_count = extension_count;
++  *out_count = o;
+   *out_strs = list;
+ }
+ 
+@@ -184,11 +160,13 @@
+       RegCloseKey(vr_key);
+       return FALSE;
+     }
++    size = sizeof(g_physdev_vid);   /* not the length of the string read before */
+     if ((status = RegQueryValueExA(vr_key, "openxr_vulkan_device_vid", NULL, &type, (BYTE *)&g_physdev_vid, &size))) {
+       ERR("Error getting openxr_vulkan_device_vid, status: %#x.\n", status);
+       RegCloseKey(vr_key);
+       return FALSE;
+     }
++    size = sizeof(g_physdev_pid);   /* not the length of the string read before */
+     if ((status = RegQueryValueExA(vr_key, "openxr_vulkan_device_pid", NULL, &type, (BYTE *)&g_physdev_pid, &size))) {
+       ERR("Error getting openxr_vulkan_device_pid, status: %#x.\n", status);
+       RegCloseKey(vr_key);
+@@ -230,8 +208,9 @@
+     return XR_ERROR_INITIALIZATION_FAILED;
+   }
+ 
++  /* No __wine_set_unix_env in CrossOver: DXVK asks for these itself, through
++   * __wineopenxr_GetVulkanDeviceExtensions. */
+   TRACE("g_device_extensions %s.\n", g_device_extensions);
+-  __wine_set_unix_env(WINE_VULKAN_DEVICE_VARIABLE, g_device_extensions);
+   return XR_SUCCESS;
+ }
+ 
+@@ -1762,71 +1741,16 @@
+                                           const XrVulkanInstanceCreateInfoKHR *createInfo,
+                                           VkInstance *vulkanInstance,
+                                           VkResult *vulkanResult) {
+-  struct vk_create_callback_context context;
+-  VkCreateInfoWineInstanceCallback callback;
+-  VkInstanceCreateInfo vulkan_create_info;
+-
+-  TRACE("instance %p, createInfo %p, vulkanInstance %p, vulkanResult %p.\n", instance, createInfo, vulkanInstance,
+-        vulkanResult);
+-
+-  if (createInfo->createFlags) {
+-    WARN("Unexpected flags %#lx.\n", (long)createInfo->createFlags);
+-  }
+-
+-  context.wine_instance = instance;
+-  context.create_info = (UINT64)createInfo;
+-
+-  vulkan_create_info = *createInfo->vulkanCreateInfo;
+-  callback.sType = VK_STRUCTURE_TYPE_CREATE_INFO_WINE_INSTANCE_CALLBACK;
+-  callback.native_create_callback = g_vk_create_instance_callback;
+-  callback.context = (UINT64)&context;
+-  callback.pNext = vulkan_create_info.pNext;
+-  vulkan_create_info.pNext = &callback;
+-
+-  *vulkanResult = vkCreateInstance(&vulkan_create_info, createInfo->vulkanAllocator, vulkanInstance);
+-
+-  if (context.ret == XR_SUCCESS && *vulkanResult != VK_SUCCESS) {
+-    WARN("winevulkan instance creation failed after native xrCreateVulkanInstanceKHR() success.\n");
+-  }
+-
+-  TRACE("result %d, vk result %d.\n", context.ret, *vulkanResult);
+-  return context.ret;
++  /* Needs winevulkan's creation callbacks, which CrossOver lacks. */
++  return XR_ERROR_FUNCTION_UNSUPPORTED;
+ }
+ 
+ XrResult WINAPI xrCreateVulkanDeviceKHR(XrInstance instance,
+                                         const XrVulkanDeviceCreateInfoKHR *createInfo,
+                                         VkDevice *vulkanDevice,
+                                         VkResult *vulkanResult) {
+-  struct vk_create_callback_context context;
+-  VkCreateInfoWineDeviceCallback callback;
+-  VkDeviceCreateInfo vulkan_create_info;
+-
+-  TRACE("instance %p, createInfo %p, vulkanDevice %p, vulkanResult %p.\n", instance, createInfo, vulkanDevice,
+-        vulkanResult);
+-
+-  if (createInfo->createFlags) {
+-    WARN("Unexpected flags %#lx.\n", (long)createInfo->createFlags);
+-  }
+-
+-  context.wine_instance = instance;
+-  context.create_info = (UINT64)createInfo;
+-
+-  vulkan_create_info = *createInfo->vulkanCreateInfo;
+-  callback.sType = VK_STRUCTURE_TYPE_CREATE_INFO_WINE_DEVICE_CALLBACK;
+-  callback.native_create_callback = g_vk_create_device_callback;
+-  callback.context = (UINT64)&context;
+-  callback.pNext = vulkan_create_info.pNext;
+-  vulkan_create_info.pNext = &callback;
+-
+-  *vulkanResult =
+-      vkCreateDevice(createInfo->vulkanPhysicalDevice, &vulkan_create_info, createInfo->vulkanAllocator, vulkanDevice);
+-
+-  if (context.ret == XR_SUCCESS && *vulkanResult != VK_SUCCESS) {
+-    WARN("winevulkan instance creation failed after native xrCreateVulkanInstanceKHR() success.\n");
+-  }
+-
+-  TRACE("result %d, vk result %d.\n", context.ret, *vulkanResult);
+-  return context.ret;
++  /* Needs winevulkan's creation callbacks, which CrossOver lacks. */
++  return XR_ERROR_FUNCTION_UNSUPPORTED;
+ }
+ 
+ XrResult WINAPI xrGetInstanceProcAddr(XrInstance instance, const char *fn_name, PFN_xrVoidFunction *out_fn) {
+@@ -1913,19 +1837,8 @@
+     _status = UNIX_CALL(xrGetVulkanDeviceExtensionsKHR, &params);
+     assert(!_status && "xrGetVulkanDeviceExtensionsKHR");
+ 
+-    if (params.result == XR_SUCCESS && bufferCapacityInput)
+-    {
+-        __wine_set_unix_env(WINE_VULKAN_DEVICE_VARIABLE, buffer);
+-        strcpy(buffer, WINE_VULKAN_DEVICE_EXTENSION_NAME);
+-        *bufferCountOutput = sizeof(WINE_VULKAN_DEVICE_EXTENSION_NAME);
+-        TRACE("returning %s.\n", buffer);
+-    }
+-    else if ((params.result == XR_SUCCESS || params.result == XR_ERROR_SIZE_INSUFFICIENT)
+-            && *bufferCountOutput < sizeof(WINE_VULKAN_DEVICE_EXTENSION_NAME))
+-    {
+-        *bufferCountOutput = sizeof(WINE_VULKAN_DEVICE_EXTENSION_NAME);
+-    }
+-
++    /* CrossOver's winevulkan has no stand-in extension for the runtime's list, so the
++     * list goes to the app as the runtime gave it. */
+     return params.result;
+ }
+ 
+@@ -1963,14 +1876,11 @@
+     return res;
+   }
+ 
+-  if (buflen < strlen(WINE_VULKAN_DEVICE_EXTENSION_NAME) + 1 || !buf) {
+-    *outlen = strlen(WINE_VULKAN_DEVICE_EXTENSION_NAME) + 1;
+-    return XR_SUCCESS;
+-  }
++  /* CrossOver's winevulkan has no stand-in extension, so DXVK gets the runtime's own list. */
++  *outlen = strlen(g_device_extensions) + 1;
++  if (buflen < *outlen || !buf) return XR_SUCCESS;
++  strcpy(buf, g_device_extensions);
+ 
+-  *outlen = strlen(WINE_VULKAN_DEVICE_EXTENSION_NAME) + 1;
+-  strcpy(buf, WINE_VULKAN_DEVICE_EXTENSION_NAME);
+-
+   return XR_SUCCESS;
+ }
+ 
