@@ -3,8 +3,8 @@
 # for the loader's arch, as lsteamclient/build.sh does and for the same reasons.
 #
 # The unix half links the native OpenXR loader (libopenxr_loader.dylib, built from Khronos'
-# OpenXR-SDK-Source) and is shipped next to it, so it finds whichever runtime XR_RUNTIME_JSON
-# or the user's active_runtime.json names.
+# OpenXR-SDK-Source with openxr-loader-macos.patch) and is shipped next to it, so it finds
+# whichever runtime XR_RUNTIME_JSON or the user's ~/.config/openxr/1/active_runtime.json names.
 #
 # Usage:
 #   ./build.sh          build both halves into build/wineopenxr-out
