@@ -63,10 +63,16 @@ for c in $(grep -l "pragma makedep unix" "$src"/*.c); do
 		-D__WINESRC__ -DWINE_UNIX_LIB -DWINE_NO_LONG_TYPES -fPIC -fasynchronous-unwind-tables -g -O2
 	objs="$objs $o"
 done
+# D3D11 on DXMT's Metal half, which stays clear of Wine's headers.
+for m in "$src"/*.m; do
+	o=$dll/$unix_dir/$(basename "${m%.m}").o
+	clang -arch "$UNIX_ARCH" -mmacosx-version-min="$MIN_VER" -fobjc-arc -c -o "$o" "$m" -fPIC -g -O2
+	objs="$objs $o"
+done
 so=$dll/$unix_dir/wineopenxr.so
 # shellcheck disable=SC2086
 clang -arch "$UNIX_ARCH" -mmacosx-version-min="$MIN_VER" -dynamiclib -o "$so" $objs "$ntdll" \
-	"$OPENXR_LOADER" -Wl,-rpath,@loader_path -install_name @rpath/wineopenxr.so 2>&1 \
+	"$OPENXR_LOADER" -framework Metal -framework Foundation -Wl,-rpath,@loader_path -install_name @rpath/wineopenxr.so 2>&1 \
 	| grep -v "was built for newer" || true
 nm -u "$so" | grep -qE "_xrGetInstanceProcAddr$" || { echo "==> $so does not import the OpenXR loader" >&2; exit 1; }
 
