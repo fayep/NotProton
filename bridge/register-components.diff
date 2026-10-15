@@ -1,18 +1,19 @@
-Register dlls/lsteamclient and programs/steam.exe with Wine's build system.
+Register dlls/lsteamclient, dlls/wineopenxr and programs/steam.exe with Wine's build system.
 
 diff --git a/configure b/configure
-index aa3c65e..2df611f 100755
+index aa3c65e..a1ace10 100755
 --- a/configure
 +++ b/configure
-@@ -1244,6 +1244,7 @@ enable_l3codecx_ax
+@@ -1244,6 +1244,8 @@ enable_l3codecx_ax
  enable_loadperf
  enable_localspl
  enable_localui
 +enable_lsteamclient
++enable_wineopenxr
  enable_lz32
  enable_magnification
  enable_mapi32
-@@ -1789,6 +1790,7 @@ enable_shutdown
+@@ -1789,6 +1791,7 @@ enable_shutdown
  enable_sort
  enable_spoolsv
  enable_start
@@ -20,15 +21,16 @@ index aa3c65e..2df611f 100755
  enable_subst
  enable_svchost
  enable_systeminfo
-@@ -22569,6 +22571,7 @@ wine_fn_config_makefile dlls/localspl enable_localspl
+@@ -22569,6 +22572,8 @@ wine_fn_config_makefile dlls/localspl enable_localspl
  wine_fn_config_makefile dlls/localspl/tests enable_tests
  wine_fn_config_makefile dlls/localui enable_localui
  wine_fn_config_makefile dlls/localui/tests enable_tests
 +wine_fn_config_makefile dlls/lsteamclient enable_lsteamclient
++wine_fn_config_makefile dlls/wineopenxr enable_wineopenxr
  wine_fn_config_makefile dlls/lz32 enable_lz32
  wine_fn_config_makefile dlls/lz32/tests enable_tests
  wine_fn_config_makefile dlls/lzexpand.dll16 enable_win16
-@@ -23367,6 +23370,8 @@ wine_fn_config_makefile programs/shutdown enable_shutdown
+@@ -23367,6 +23372,8 @@ wine_fn_config_makefile programs/shutdown enable_shutdown
  wine_fn_config_makefile programs/sort enable_sort
  wine_fn_config_makefile programs/spoolsv enable_spoolsv
  wine_fn_config_makefile programs/start enable_start
@@ -37,7 +39,7 @@ index aa3c65e..2df611f 100755
  wine_fn_config_makefile programs/subst enable_subst
  wine_fn_config_makefile programs/svchost enable_svchost
  wine_fn_config_makefile programs/systeminfo enable_systeminfo
-@@ -23493,7 +23498,7 @@ dlls/wineandroid.drv/wine-debug.apk: dlls/wineandroid.drv/build.gradle ${wine_sr
+@@ -23493,7 +23500,7 @@ dlls/wineandroid.drv/wine-debug.apk: dlls/wineandroid.drv/build.gradle ${wine_sr
  	mv dlls/wineandroid.drv/build/outputs/apk/debug/wine-debug.apk \$@"
  
  
@@ -47,18 +49,19 @@ index aa3c65e..2df611f 100755
  TAGSFLAGS="--langmap='c:+.idl.l.rh,make:(Make*.in)'"
  
 diff --git a/configure.ac b/configure.ac
-index ee0b1c4..29a174a 100644
+index ee0b1c4..5ca8d4b 100644
 --- a/configure.ac
 +++ b/configure.ac
-@@ -2862,6 +2862,7 @@ WINE_CONFIG_MAKEFILE(dlls/localspl)
+@@ -2862,6 +2862,8 @@ WINE_CONFIG_MAKEFILE(dlls/localspl)
  WINE_CONFIG_MAKEFILE(dlls/localspl/tests)
  WINE_CONFIG_MAKEFILE(dlls/localui)
  WINE_CONFIG_MAKEFILE(dlls/localui/tests)
 +WINE_CONFIG_MAKEFILE(dlls/lsteamclient)
++WINE_CONFIG_MAKEFILE(dlls/wineopenxr)
  WINE_CONFIG_MAKEFILE(dlls/lz32)
  WINE_CONFIG_MAKEFILE(dlls/lz32/tests)
  WINE_CONFIG_MAKEFILE(dlls/lzexpand.dll16)
-@@ -3660,6 +3661,8 @@ WINE_CONFIG_MAKEFILE(programs/shutdown)
+@@ -3660,6 +3662,8 @@ WINE_CONFIG_MAKEFILE(programs/shutdown)
  WINE_CONFIG_MAKEFILE(programs/sort)
  WINE_CONFIG_MAKEFILE(programs/spoolsv)
  WINE_CONFIG_MAKEFILE(programs/start)

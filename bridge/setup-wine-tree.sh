@@ -59,23 +59,30 @@ if [ "$head" != "$WINE_COMMIT" ]; then
 fi
 echo "==> source tree at pinned $WINE_COMMIT"
 
-if grep -q 'WINE_CONFIG_MAKEFILE(dlls/lsteamclient)' "$WINE_SRC/configure.ac"; then
+if grep -q 'WINE_CONFIG_MAKEFILE(dlls/wineopenxr)' "$WINE_SRC/configure.ac"; then
     echo "==> components already registered with configure"
 else
-    echo "==> registering dlls/lsteamclient and programs/steam.exe with configure"
+    # A tree registered before wineopenxr existed: start configure over from the pinned commit.
+    if grep -q 'WINE_CONFIG_MAKEFILE(dlls/lsteamclient)' "$WINE_SRC/configure.ac"; then
+        ( cd "$WINE_SRC" && git checkout -- configure configure.ac )
+        rm -f "$WINE_BUILD/Makefile"
+    fi
+    echo "==> registering dlls/lsteamclient, dlls/wineopenxr and programs/steam.exe with configure"
     ( cd "$WINE_SRC" && git apply "$here/register-components.diff" )
 fi
 
 "$repo/lsteamclient/fetch.sh"
+"$repo/wineopenxr/fetch.sh"
 "$repo/steam-shim/fetch-headers.sh"
 
 # Whole trees, not just the two Makefile.in files: makedep reads the SOURCES each one
 # lists and fails the entire configure if any of those files is absent.
-mkdir -p "$WINE_SRC/dlls/lsteamclient" "$WINE_SRC/programs/steam.exe"
+mkdir -p "$WINE_SRC/dlls/lsteamclient" "$WINE_SRC/dlls/wineopenxr" "$WINE_SRC/programs/steam.exe"
 rsync -a "$repo/build/lsteamclient/" "$WINE_SRC/dlls/lsteamclient/"
+rsync -a "$repo/build/wineopenxr/" "$WINE_SRC/dlls/wineopenxr/"
 rsync -a --exclude build.sh --exclude gen-implib.sh --exclude fetch-headers.sh \
     "$repo/steam-shim/" "$WINE_SRC/programs/steam.exe/"
-echo "==> placed sources for dlls/lsteamclient and programs/steam.exe"
+echo "==> placed sources for dlls/lsteamclient, dlls/wineopenxr and programs/steam.exe"
 
 # A configure that dies in config.status still leaves config.status behind, so that
 # is not the thing to test for. The Makefile is what has to exist.
@@ -108,3 +115,4 @@ fi
 
 echo "==> ready, now run: ../lsteamclient/build.sh --install"
 echo "                    ../steam-shim/build.sh --install"
+echo "                    ../wineopenxr/build.sh"
