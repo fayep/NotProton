@@ -36,7 +36,7 @@ into the runtime's on the unix side once a shared fence says the game is done wi
      unix_xrAddTrackableImageDatabaseANDROID,
 --- a/metal.h
 +++ b/metal.h
-@@ -0,0 +1,15 @@
+@@ -0,0 +1,16 @@
 +#ifndef __WINE_OPENXR_METAL_H
 +#define __WINE_OPENXR_METAL_H
 +
@@ -50,11 +50,12 @@ into the runtime's on the unix side once a shared fence says the game is done wi
 +void metal_copy(void *queue, void *src, void *dst, void *ready_event, uint64_t ready_value, void *done_event,
 +                uint64_t done_value);
 +void metal_release(void *object);
++void metal_log(const char *message);
 +
 +#endif /* __WINE_OPENXR_METAL_H */
 --- a/metal.m
 +++ b/metal.m
-@@ -0,0 +1,67 @@
+@@ -0,0 +1,87 @@
 +/* The Metal half of D3D11 on DXMT: DXMT registers the Mach ports of shared textures and
 + * fences under bootstrap names, and these open them the way its own winemetal does. Like it,
 + * they leave the looked-up send rights to the handle and event. */
@@ -121,6 +122,26 @@ into the runtime's on the unix side once a shared fence says the game is done wi
 +
 +void metal_release(void *object) {
 +  if (object) CFRelease(object);
++}
++
++/* Into the runtime's log, which users can find, rather than Wine's debug output, which
++ * NotProton does not enable. */
++void metal_log(const char *message) {
++  @autoreleasepool {
++    NSString *path = [NSHomeDirectory() stringByAppendingPathComponent:@"Library/Logs/alvrxr.log"];
++    NSDateFormatter *f = [[NSDateFormatter alloc] init];
++    f.dateFormat = @"HH:mm:ss.SSS";
++    NSString *line = [NSString stringWithFormat:@"%@ [wineopenxr %d] %s\n", [f stringFromDate:[NSDate date]],
++                      getpid(), message];
++    NSFileHandle *h = [NSFileHandle fileHandleForWritingAtPath:path];
++    if (!h) {
++      [line writeToFile:path atomically:NO encoding:NSUTF8StringEncoding error:nil];
++      return;
++    }
++    [h seekToEndOfFile];
++    [h writeData:[line dataUsingEncoding:NSUTF8StringEncoding]];
++    [h closeFile];
++  }
 +}
 --- a/openxr.c
 +++ b/openxr.c
@@ -235,7 +256,7 @@ into the runtime's on the unix side once a shared fence says the game is done wi
  XrResult WINAPI wine_xrGetVulkanGraphicsDeviceKHR(XrInstance instance,
                                                    XrSystemId systemId,
                                                    VkInstance vkInstance,
-@@ -471,5 +530,31 @@
+@@ -471,5 +530,34 @@
    }
  
    params->ret = xrGetInstanceProcAddr(wine_instance ? wine_instance->host_instance : NULL, params->name, &fn);
@@ -264,12 +285,20 @@ into the runtime's on the unix side once a shared fence says the game is done wi
 +    case METAL_RELEASE:
 +      metal_release((void *)(uintptr_t)params->src);
 +      break;
++    case METAL_LOG:
++      metal_log((const char *)(uintptr_t)params->message);
++      break;
 +  }
    return STATUS_SUCCESS;
  }
 --- a/openxr_loader.c
 +++ b/openxr_loader.c
-@@ -6,6 +6,7 @@
+@@ -1,3 +1,4 @@
++#include <stdio.h>
+ #include <stdlib.h>
+ 
+ #include "initguid.h"
+@@ -6,6 +7,7 @@
  #include "wine/vulkan_driver.h"
  #include "dxvk-interop.h"
  #include "vkd3d-proton-interop.h"
@@ -277,7 +306,7 @@ into the runtime's on the unix side once a shared fence says the game is done wi
  
  WINE_DEFAULT_DEBUG_CHANNEL(openxr);
  
-@@ -31,6 +32,8 @@
+@@ -31,6 +33,8 @@
    XrCompositionLayerEquirect2KHR equirect2;
  };
  
@@ -286,7 +315,7 @@ into the runtime's on the unix side once a shared fence says the game is done wi
  static CRITICAL_SECTION session_list_lock = {NULL, -1, 0, 0, 0, 0};
  static struct list session_list = LIST_INIT(session_list);
  
-@@ -55,46 +58,22 @@
+@@ -55,46 +59,22 @@
  }
  
  static void parse_extensions(const char *in, uint32_t *out_count, char ***out_strs) {
@@ -346,7 +375,7 @@ into the runtime's on the unix side once a shared fence says the game is done wi
    *out_strs = list;
  }
  
-@@ -184,11 +163,13 @@
+@@ -184,11 +164,13 @@
        RegCloseKey(vr_key);
        return FALSE;
      }
@@ -360,7 +389,7 @@ into the runtime's on the unix side once a shared fence says the game is done wi
      if ((status = RegQueryValueExA(vr_key, "openxr_vulkan_device_pid", NULL, &type, (BYTE *)&g_physdev_pid, &size))) {
        ERR("Error getting openxr_vulkan_device_pid, status: %#x.\n", status);
        RegCloseKey(vr_key);
-@@ -230,8 +211,9 @@
+@@ -230,8 +212,9 @@
      return XR_ERROR_INITIALIZATION_FAILED;
    }
  
@@ -371,7 +400,7 @@ into the runtime's on the unix side once a shared fence says the game is done wi
    return XR_SUCCESS;
  }
  
-@@ -496,6 +478,7 @@
+@@ -496,6 +479,7 @@
    if (wine_instance->dxvk_device) {
      wine_instance->dxvk_device->lpVtbl->Release(wine_instance->dxvk_device);
    }
@@ -379,7 +408,7 @@ into the runtime's on the unix side once a shared fence says the game is done wi
  
    if (wine_instance->d3d12_device) {
      vkDestroyCommandPool(wine_instance->vk_device, wine_instance->vk_command_pool, NULL);
-@@ -561,11 +544,181 @@
+@@ -561,11 +545,216 @@
    return XR_SUCCESS;
  }
  
@@ -399,6 +428,19 @@ into the runtime's on the unix side once a shared fence says the game is done wi
 +  NTSTATUS _status = UNIX_CALL(metal, params);
 +  assert(!_status && "metal");
 +  return params->ret;
++}
++
++static void dxmt_log(const char *format, ...) {
++  struct metal_openxr_params params = {.op = METAL_LOG};
++  char text[512];
++  va_list args;
++
++  va_start(args, format);
++  vsnprintf(text, sizeof(text), format, args);
++  va_end(args);
++  WARN("%s\n", text);
++  params.message = (UINT64)(uintptr_t)text;
++  metal_call(&params);
 +}
 +
 +static void metal_release_object(UINT64 object) {
@@ -435,7 +477,7 @@ into the runtime's on the unix side once a shared fence says the game is done wi
 +  query.pPrivateRuntimeData = &data;
 +  query.PrivateRuntimeDataSize = sizeof(data);
 +  if (D3DKMTQueryResourceInfo(&query) || query.PrivateRuntimeDataSize != sizeof(data)) {
-+    WARN("unexpected shared resource data, size %u\n", query.PrivateRuntimeDataSize);
++    dxmt_log("not a DXMT shared texture: runtime data of %u bytes", query.PrivateRuntimeDataSize);
 +    return FALSE;
 +  }
 +  open.hDevice = instance->dxmt_kmt_device;
@@ -445,7 +487,7 @@ into the runtime's on the unix side once a shared fence says the game is done wi
 +  open.pPrivateRuntimeData = &data;
 +  open.PrivateRuntimeDataSize = sizeof(data);
 +  if (D3DKMTOpenResource2(&open)) {
-+    WARN("D3DKMTOpenResource2 failed\n");
++    dxmt_log("D3DKMTOpenResource2 failed");
 +    return FALSE;
 +  }
 +  destroy.hDevice = instance->dxmt_kmt_device;
@@ -478,7 +520,7 @@ into the runtime's on the unix side once a shared fence says the game is done wi
 +  open.pPrivateRuntimeData = event_params.name;
 +  open.PrivateRuntimeDataSize = 54;
 +  if (D3DKMTOpenKeyedMutex2(&open)) {
-+    WARN("D3DKMTOpenKeyedMutex2 failed\n");
++    dxmt_log("D3DKMTOpenKeyedMutex2 failed");
 +    return FALSE;
 +  }
 +  *kmt_mutex = open.hKeyedMutex;
@@ -488,6 +530,24 @@ into the runtime's on the unix side once a shared fence says the game is done wi
 +    return FALSE;
 +  }
 +  return TRUE;
++}
++
++/* Only DXMT's shared textures carry the runtime data the swapchain images rely on. */
++static BOOL dxmt_device_is_dxmt(wine_XrInstance *instance) {
++  D3D11_TEXTURE2D_DESC desc = {1, 1, 1, 1, DXGI_FORMAT_R8G8B8A8_UNORM, {1, 0}, D3D11_USAGE_DEFAULT,
++                               D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE, 0,
++                               D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX};
++  ID3D11Texture2D *texture;
++  D3DKMT_HANDLE mutex = 0;
++  char name[64];
++  BOOL ok;
++
++  if (FAILED(ID3D11Device_CreateTexture2D(instance->dxmt_device, &desc, NULL, &texture))) {
++    return FALSE;
++  }
++  ok = dxmt_texture_port_name(instance, texture, name, &mutex) && mutex;
++  ID3D11Texture2D_Release(texture);
++  return ok;
 +}
 +
 +static void dxmt_release(wine_XrInstance *instance) {
@@ -545,6 +605,10 @@ into the runtime's on the unix side once a shared fence says the game is done wi
 +  if (!(instance->metal_queue = metal_call(&params))) {
 +    goto fail;
 +  }
++  if (!dxmt_device_is_dxmt(instance)) {
++    dxmt_log("the game's D3D11 is not DXMT: set its graphics to DXMT in NotProton");
++    goto fail;
++  }
 +  return XR_SUCCESS;
 +
 +fail:
@@ -561,7 +625,7 @@ into the runtime's on the unix side once a shared fence says the game is done wi
    struct xrCreateSession_params params = {
        .instance = instance,
        .createInfo = &our_create_info,
-@@ -590,8 +743,18 @@
+@@ -590,8 +779,18 @@
          hr = ID3D11Device_QueryInterface(their_d3d11_binding->device, &IID_IDXGIVkInteropDevice2,
                                           (void **)&wine_instance->dxvk_device);
          if (FAILED(hr)) {
@@ -569,7 +633,7 @@ into the runtime's on the unix side once a shared fence says the game is done wi
 -          return XR_ERROR_VALIDATION_FAILURE;
 +          wine_instance->dxvk_device = NULL;
 +          if (dxmt_init(wine_instance, their_d3d11_binding->device) != XR_SUCCESS) {
-+            WARN("Given ID3D11Device is neither DXVK's nor DXMT's.\n");
++            dxmt_log("the game's D3D11 is neither DXVK nor DXMT: set its graphics to DXMT in NotProton");
 +            return XR_ERROR_VALIDATION_FAILURE;
 +          }
 +          our_metal_binding.type = WINE_XR_TYPE_GRAPHICS_BINDING_METAL_KHR;
@@ -582,7 +646,7 @@ into the runtime's on the unix side once a shared fence says the game is done wi
          }
  
          our_vk_binding.type = XR_TYPE_GRAPHICS_BINDING_VULKAN_KHR;
-@@ -910,6 +1073,45 @@
+@@ -910,6 +1109,45 @@
    }
  }
  
@@ -628,7 +692,7 @@ into the runtime's on the unix side once a shared fence says the game is done wi
  XrResult WINAPI xrEnumerateSwapchainFormats(XrSession session,
                                              uint32_t formatCapacityInput,
                                              uint32_t *formatCountOutput,
-@@ -957,7 +1159,8 @@
+@@ -957,7 +1195,8 @@
  
    o = 0;
    for (i = 0; i < real_format_count; ++i) {
@@ -638,7 +702,7 @@ into the runtime's on the unix side once a shared fence says the game is done wi
  
      if (mapped == DXGI_FORMAT_UNKNOWN) {
        continue;
-@@ -991,7 +1194,14 @@
+@@ -991,7 +1230,14 @@
  
    TRACE("%p, %p, %p\n", session, createInfo, swapchain);
  
@@ -654,7 +718,7 @@ into the runtime's on the unix side once a shared fence says the game is done wi
      BOOL format_is_depth;
      our_createInfo.format = map_format_dxgi_to_vulkan(createInfo->format);
      if (our_createInfo.format == VK_FORMAT_UNDEFINED) {
-@@ -1046,6 +1256,40 @@
+@@ -1046,6 +1292,40 @@
    free(swapchain->acquired_indices);
  }
  
@@ -695,7 +759,7 @@ into the runtime's on the unix side once a shared fence says the game is done wi
  XrResult WINAPI xrDestroySwapchain(XrSwapchain swapchain) {
    wine_XrSwapchain *wine_swapchain = wine_swapchain_from_handle(swapchain);
    struct xrDestroySwapchain_params params = {.swapchain = swapchain};
-@@ -1062,7 +1306,9 @@
+@@ -1062,7 +1342,9 @@
  
    if (wine_swapchain->image_count) {
      UINT i;
@@ -706,7 +770,7 @@ into the runtime's on the unix side once a shared fence says the game is done wi
        XrSwapchainImageD3D11KHR *d3d11_images = (XrSwapchainImageD3D11KHR *)wine_swapchain->images;
        for (i = 0; i < wine_swapchain->image_count; i++) {
          d3d11_images[i].texture->lpVtbl->Release(d3d11_images[i].texture);
-@@ -1150,6 +1396,99 @@
+@@ -1150,6 +1432,101 @@
    return vkEndCommandBuffer(*out_cmd);
  }
  
@@ -773,19 +837,21 @@ into the runtime's on the unix side once a shared fence says the game is done wi
 +    d3d11_images[i].next = NULL;
 +    hr = ID3D11Device_CreateTexture2D(instance->dxmt_device, &desc, NULL, &d3d11_images[i].texture);
 +    if (FAILED(hr)) {
-+      WARN("CreateTexture2D failed: %08x\n", hr);
++      dxmt_log("CreateTexture2D failed: %08x for format %d, %ux%u, %u layers, %u mips, %u samples, bind %#x, "
++               "usage %#llx", hr, desc.Format, desc.Width, desc.Height, desc.ArraySize, desc.MipLevels,
++               desc.SampleDesc.Count, desc.BindFlags, (unsigned long long)info->usageFlags);
 +      goto fail;
 +    }
 +    if (swapchain->metal_copy) {
 +      swapchain->metal_dst[i] = (UINT64)(uintptr_t)host_images[i].texture;
 +      if (!dxmt_open_image(instance, d3d11_images[i].texture, &swapchain->metal_src[i], &swapchain->metal_events[i],
 +                           &swapchain->kmt_mutexes[i])) {
-+        WARN("could not open a shared texture as a Metal one\n");
++        dxmt_log("could not open a shared texture as a Metal one");
 +        goto fail;
 +      }
 +      if (FAILED(hr = ID3D11Texture2D_QueryInterface(d3d11_images[i].texture, &IID_IDXGIKeyedMutex,
 +                                                     (void **)&swapchain->keyed_mutexes[i]))) {
-+        WARN("no keyed mutex: %08x\n", hr);
++        dxmt_log("no keyed mutex: %08x", hr);
 +        goto fail;
 +      }
 +    }
@@ -806,7 +872,7 @@ into the runtime's on the unix side once a shared fence says the game is done wi
  XrResult WINAPI xrEnumerateSwapchainImages(XrSwapchain swapchain,
                                             uint32_t imageCapacityInput,
                                             uint32_t *imageCountOutput,
-@@ -1176,6 +1515,13 @@
+@@ -1176,6 +1553,13 @@
      return params.result;
    }
  
@@ -820,7 +886,7 @@ into the runtime's on the unix side once a shared fence says the game is done wi
    if (!wine_swapchain->image_count) {
      uint32_t image_count;
      params.imageCapacityInput = 0;
-@@ -1394,6 +1740,18 @@
+@@ -1394,6 +1778,18 @@
    _status = UNIX_CALL(xrAcquireSwapchainImage, &params);
    assert(!_status && "xrAcquireSwapchainImage");
  
@@ -839,7 +905,7 @@ into the runtime's on the unix side once a shared fence says the game is done wi
    if (!wine_instance->d3d12_device) {
      unlock_d3d_queue(wine_instance, FALSE);
      return params.result;
-@@ -1443,6 +1801,34 @@
+@@ -1443,6 +1839,34 @@
  
    lock_d3d_queue(wine_instance, TRUE);
  
@@ -866,7 +932,7 @@ into the runtime's on the unix side once a shared fence says the game is done wi
 +        metal_call(&copy);
 +        D3DKMTReleaseKeyedMutex(&release);
 +      } else {
-+        WARN("could not take the keyed mutex for the copy\n");
++        dxmt_log("could not take the keyed mutex for the copy");
 +      }
 +    }
 +  }
@@ -874,7 +940,7 @@ into the runtime's on the unix side once a shared fence says the game is done wi
    if (wine_instance->d3d12_device)
    {
      index = wine_swapchain->acquired_indices[wine_swapchain->acquired_start];
-@@ -1762,71 +2148,16 @@
+@@ -1762,71 +2186,16 @@
                                            const XrVulkanInstanceCreateInfoKHR *createInfo,
                                            VkInstance *vulkanInstance,
                                            VkResult *vulkanResult) {
@@ -950,7 +1016,7 @@ into the runtime's on the unix side once a shared fence says the game is done wi
  }
  
  XrResult WINAPI xrGetInstanceProcAddr(XrInstance instance, const char *fn_name, PFN_xrVoidFunction *out_fn) {
-@@ -1913,19 +2244,8 @@
+@@ -1913,19 +2282,8 @@
      _status = UNIX_CALL(xrGetVulkanDeviceExtensionsKHR, &params);
      assert(!_status && "xrGetVulkanDeviceExtensionsKHR");
  
@@ -972,7 +1038,7 @@ into the runtime's on the unix side once a shared fence says the game is done wi
      return params.result;
  }
  
-@@ -1963,13 +2283,10 @@
+@@ -1963,13 +2321,10 @@
      return res;
    }
  
@@ -992,7 +1058,7 @@ into the runtime's on the unix side once a shared fence says the game is done wi
  }
 --- a/openxr_loader.h
 +++ b/openxr_loader.h
-@@ -50,7 +50,41 @@
+@@ -50,7 +50,43 @@
    XrResult ret;
  };
  
@@ -1004,6 +1070,7 @@ into the runtime's on the unix side once a shared fence says the game is done wi
 +  METAL_OPEN_EVENT,
 +  METAL_COPY,
 +  METAL_RELEASE,
++  METAL_LOG,
 +};
 +
 +struct metal_openxr_params {
@@ -1011,6 +1078,7 @@ into the runtime's on the unix side once a shared fence says the game is done wi
 +  char name[64];
 +  UINT64 queue, src, dst;
 +  UINT64 ready_event, ready_value, done_event, done_value;
++  UINT64 message;   /* METAL_LOG: a NUL-terminated string */
 +  UINT64 ret;
 +};
 +
@@ -1034,7 +1102,7 @@ into the runtime's on the unix side once a shared fence says the game is done wi
    XrInstance host_instance;
    VkInstance vk_instance;
    VkPhysicalDevice vk_phys_dev;
-@@ -65,6 +99,10 @@
+@@ -65,6 +101,10 @@
    VkDevice vk_device;
    VkQueue vk_queue;
    VkCommandPool vk_command_pool;
@@ -1045,7 +1113,7 @@ into the runtime's on the unix side once a shared fence says the game is done wi
  } wine_XrInstance;
  
  static inline wine_XrInstance *wine_instance_from_handle(XrInstance handle) {
-@@ -109,6 +147,13 @@
+@@ -109,6 +149,13 @@
    XrSwapchainCreateInfo create_info;
    VkCommandBuffer *cmd_release;
    VkCommandBuffer *cmd_acquire;
