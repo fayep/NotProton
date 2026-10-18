@@ -770,7 +770,7 @@ into the runtime's on the unix side once a shared fence says the game is done wi
        XrSwapchainImageD3D11KHR *d3d11_images = (XrSwapchainImageD3D11KHR *)wine_swapchain->images;
        for (i = 0; i < wine_swapchain->image_count; i++) {
          d3d11_images[i].texture->lpVtbl->Release(d3d11_images[i].texture);
-@@ -1150,6 +1432,101 @@
+@@ -1150,6 +1432,105 @@
    return vkEndCommandBuffer(*out_cmd);
  }
  
@@ -831,6 +831,10 @@ into the runtime's on the unix side once a shared fence says the game is done wi
 +  swapchain->acquired = calloc(image_count, sizeof(BOOL));
 +  swapchain->acquired_indices = calloc(image_count, sizeof(uint32_t));
 +  swapchain->acquired_start = swapchain->acquired_count = 0;
++  for (i = 0; i < swapchain->early_acquired_count && i < image_count; i++) {
++    swapchain->acquired_indices[swapchain->acquired_count++] = swapchain->early_acquired[i];
++    swapchain->early_unsynced |= 1u << swapchain->early_acquired[i];
++  }
 +
 +  for (i = 0; i < image_count; ++i) {
 +    d3d11_images[i].type = XR_TYPE_SWAPCHAIN_IMAGE_D3D11_KHR;
@@ -872,7 +876,7 @@ into the runtime's on the unix side once a shared fence says the game is done wi
  XrResult WINAPI xrEnumerateSwapchainImages(XrSwapchain swapchain,
                                             uint32_t imageCapacityInput,
                                             uint32_t *imageCountOutput,
-@@ -1176,6 +1553,13 @@
+@@ -1176,6 +1557,13 @@
      return params.result;
    }
  
@@ -886,10 +890,14 @@ into the runtime's on the unix side once a shared fence says the game is done wi
    if (!wine_swapchain->image_count) {
      uint32_t image_count;
      params.imageCapacityInput = 0;
-@@ -1394,6 +1778,18 @@
+@@ -1394,6 +1782,22 @@
    _status = UNIX_CALL(xrAcquireSwapchainImage, &params);
    assert(!_status && "xrAcquireSwapchainImage");
  
++  if (wine_instance->dxmt_device && params.result == XR_SUCCESS && !wine_swapchain->acquired_indices &&
++      wine_swapchain->early_acquired_count < ARRAY_SIZE(wine_swapchain->early_acquired)) {
++    wine_swapchain->early_acquired[wine_swapchain->early_acquired_count++] = *index;
++  }
 +  if (wine_instance->dxmt_device && params.result == XR_SUCCESS && wine_swapchain->acquired_indices) {
 +    uint32_t next = (wine_swapchain->acquired_start + wine_swapchain->acquired_count) % wine_swapchain->image_count;
 +    if (wine_swapchain->acquired_count < wine_swapchain->image_count) {
@@ -905,7 +913,57 @@ into the runtime's on the unix side once a shared fence says the game is done wi
    if (!wine_instance->d3d12_device) {
      unlock_d3d_queue(wine_instance, FALSE);
      return params.result;
-@@ -1443,6 +1839,34 @@
+@@ -1423,6 +1827,49 @@
+   return params.result;
+ }
+ 
++/* Hands a DXMT image the game holds (key 0) to the copy into the host image of the same index,
++ * and back. */
++static void dxmt_copy_image(wine_XrInstance *wine_instance, wine_XrSwapchain *wine_swapchain, uint32_t index) {
++  D3DKMT_ACQUIREKEYEDMUTEX acquire = {.hKeyedMutex = wine_swapchain->kmt_mutexes[index], .Key = 1};
++  D3DKMT_RELEASEKEYEDMUTEX release = {.hKeyedMutex = wine_swapchain->kmt_mutexes[index], .Key = 0};
++  struct metal_openxr_params copy = {
++      .op = METAL_COPY,
++      .queue = wine_instance->metal_queue,
++      .src = wine_swapchain->metal_src[index],
++      .dst = wine_swapchain->metal_dst[index],
++      .ready_event = wine_swapchain->metal_events[index],
++      .done_event = wine_swapchain->metal_events[index],
++  };
++  /* Key 1 is the copy's: it waits on the GPU for the value the game's release signals. */
++  IDXGIKeyedMutex_ReleaseSync(wine_swapchain->keyed_mutexes[index], 1);
++  if (!D3DKMTAcquireKeyedMutex(&acquire)) {
++    copy.ready_value = acquire.FenceValue;
++    copy.done_value = release.FenceValue = acquire.FenceValue + 1;
++    metal_call(&copy);
++    D3DKMTReleaseKeyedMutex(&release);
++  } else {
++    dxmt_log("could not take the keyed mutex for the copy");
++  }
++}
++
++/* Oculus' compositor reads layer textures as they are when it composes, and games rely on it:
++ * Unreal draws a static layer's one image after committing it. So each frame, the image a quad
++ * layer shows is copied again, after whatever the game has drawn into it since. */
++static void dxmt_refresh_layer(wine_XrInstance *wine_instance, XrSwapchain swapchain) {
++  wine_XrSwapchain *wine_swapchain;
++  uint32_t index, i;
++
++  if (!swapchain) return;
++  wine_swapchain = wine_swapchain_from_handle(swapchain);
++  if (!wine_swapchain->metal_copy || !wine_swapchain->last_released_plus1) return;
++  index = wine_swapchain->last_released_plus1 - 1;
++  for (i = 0; i < wine_swapchain->acquired_count; i++)
++    if (wine_swapchain->acquired_indices[(wine_swapchain->acquired_start + i) % wine_swapchain->image_count] == index)
++      return;
++  IDXGIKeyedMutex_AcquireSync(wine_swapchain->keyed_mutexes[index], 0, INFINITE);
++  dxmt_copy_image(wine_instance, wine_swapchain, index);
++}
++
+ XrResult WINAPI xrReleaseSwapchainImage(XrSwapchain swapchain, const XrSwapchainImageReleaseInfo *releaseInfo) {
+   wine_XrSwapchain *wine_swapchain = wine_swapchain_from_handle(swapchain);
+   wine_XrInstance *wine_instance = wine_swapchain->session->instance;
+@@ -1443,6 +1890,20 @@
  
    lock_d3d_queue(wine_instance, TRUE);
  
@@ -914,33 +972,34 @@ into the runtime's on the unix side once a shared fence says the game is done wi
 +    wine_swapchain->acquired_start = (wine_swapchain->acquired_start + 1) % wine_swapchain->image_count;
 +    wine_swapchain->acquired_count -= 1;
 +    if (wine_swapchain->metal_copy) {
-+      D3DKMT_ACQUIREKEYEDMUTEX acquire = {.hKeyedMutex = wine_swapchain->kmt_mutexes[index], .Key = 1};
-+      D3DKMT_RELEASEKEYEDMUTEX release = {.hKeyedMutex = wine_swapchain->kmt_mutexes[index], .Key = 0};
-+      struct metal_openxr_params copy = {
-+          .op = METAL_COPY,
-+          .queue = wine_instance->metal_queue,
-+          .src = wine_swapchain->metal_src[index],
-+          .dst = wine_swapchain->metal_dst[index],
-+          .ready_event = wine_swapchain->metal_events[index],
-+          .done_event = wine_swapchain->metal_events[index],
-+      };
-+      /* Key 1 is the copy's: it waits on the GPU for the value the game's release signals. */
-+      IDXGIKeyedMutex_ReleaseSync(wine_swapchain->keyed_mutexes[index], 1);
-+      if (!D3DKMTAcquireKeyedMutex(&acquire)) {
-+        copy.ready_value = acquire.FenceValue;
-+        copy.done_value = release.FenceValue = acquire.FenceValue + 1;
-+        metal_call(&copy);
-+        D3DKMTReleaseKeyedMutex(&release);
-+      } else {
-+        dxmt_log("could not take the keyed mutex for the copy");
++      if (wine_swapchain->early_unsynced & (1u << index)) {
++        wine_swapchain->early_unsynced &= ~(1u << index);
++        IDXGIKeyedMutex_AcquireSync(wine_swapchain->keyed_mutexes[index], 0, INFINITE);
 +      }
++      dxmt_copy_image(wine_instance, wine_swapchain, index);
++      wine_swapchain->last_released_plus1 = index + 1;
 +    }
 +  }
 +
    if (wine_instance->d3d12_device)
    {
      index = wine_swapchain->acquired_indices[wine_swapchain->acquired_start];
-@@ -1762,71 +2186,16 @@
+@@ -1661,6 +2122,14 @@
+   our_frameEndInfo = *frameEndInfo;
+   our_frameEndInfo.layers = (const XrCompositionLayerBaseHeader *const *)wine_session->composition_layer_ptrs;
+ 
++  if (wine_session->instance->dxmt_device) {
++    for (i = 0; i < frameEndInfo->layerCount; ++i) {
++      if (frameEndInfo->layers[i]->type == XR_TYPE_COMPOSITION_LAYER_QUAD)
++        dxmt_refresh_layer(wine_session->instance,
++                           ((const XrCompositionLayerQuad *)frameEndInfo->layers[i])->subImage.swapchain);
++    }
++  }
++
+   lock_d3d_queue(wine_session->instance, FALSE);
+   _status = UNIX_CALL(xrEndFrame, &params);
+   assert(!_status && "xrEndFrame");
+@@ -1762,71 +2231,16 @@
                                            const XrVulkanInstanceCreateInfoKHR *createInfo,
                                            VkInstance *vulkanInstance,
                                            VkResult *vulkanResult) {
@@ -1016,7 +1075,7 @@ into the runtime's on the unix side once a shared fence says the game is done wi
  }
  
  XrResult WINAPI xrGetInstanceProcAddr(XrInstance instance, const char *fn_name, PFN_xrVoidFunction *out_fn) {
-@@ -1913,19 +2282,8 @@
+@@ -1913,19 +2327,8 @@
      _status = UNIX_CALL(xrGetVulkanDeviceExtensionsKHR, &params);
      assert(!_status && "xrGetVulkanDeviceExtensionsKHR");
  
@@ -1038,7 +1097,7 @@ into the runtime's on the unix side once a shared fence says the game is done wi
      return params.result;
  }
  
-@@ -1963,13 +2321,10 @@
+@@ -1963,13 +2366,10 @@
      return res;
    }
  
@@ -1113,7 +1172,7 @@ into the runtime's on the unix side once a shared fence says the game is done wi
  } wine_XrInstance;
  
  static inline wine_XrInstance *wine_instance_from_handle(XrInstance handle) {
-@@ -109,6 +149,13 @@
+@@ -109,6 +149,19 @@
    XrSwapchainCreateInfo create_info;
    VkCommandBuffer *cmd_release;
    VkCommandBuffer *cmd_acquire;
@@ -1124,6 +1183,12 @@ into the runtime's on the unix side once a shared fence says the game is done wi
 +  UINT64 *metal_src, *metal_dst, *metal_events;
 +  IDXGIKeyedMutex **keyed_mutexes;
 +  UINT *kmt_mutexes;
++  /* The image released last, plus one; 0 before the first release. */
++  uint32_t last_released_plus1;
++  /* Images acquired before the first xrEnumerateSwapchainImages made the D3D11 ones, which
++   * Revive-style bridges do: they are taken over once those exist. Bit i of early_unsynced: image
++   * i was taken over so, and its keyed mutex is taken for the game at its first release. */
++  uint32_t early_acquired[8], early_acquired_count, early_unsynced;
  } wine_XrSwapchain;
  
  static inline wine_XrSwapchain *wine_swapchain_from_handle(XrSwapchain handle) {
