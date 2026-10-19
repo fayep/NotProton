@@ -3,7 +3,8 @@
 # because 32-bit games use the same steam.exe.
 #
 #   ./build.sh            builds and checks it
-#   ./build.sh --install  also copies it into the bridge
+#   ./build.sh --install  also copies it into the bridge. The next game launch
+#                         stages it into the prefix, so Steam needn't restart.
 #
 # Overridable: WINE_BUILD, WINE_SRC_REL, BRIDGE_DIR
 
@@ -76,4 +77,4 @@ mkdir -p "$BRIDGE_DIR"
 cp -f "$out" "$dst"
 cmp -s "$out" "$dst" || { echo "==> install verify failed: $dst differs from $out"; exit 1; }
 echo "==> installed $dst"
-echo "==> done. prefixes refresh their copy from the bridge on next launch."
+echo "==> done. each prefix picks it up on its next game launch; Steam needn't restart."

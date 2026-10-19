@@ -9,6 +9,7 @@
 # Usage:
 #   ./build.sh            build both halves into build/wineopenxr-out
 #   ./build.sh --install  also install to the bridge, which the run script stages from
+#                         on the next game launch, so Steam needn't restart
 #
 # Overridable: WINE_BUILD, WINE_SRC_REL, UNIX_ARCH, MIN_VER, CX_ROOT, OPENXR_LOADER, BRIDGE_DIR
 
@@ -91,4 +92,4 @@ ls -la "$OUT"/*
 [ "$install" -eq 1 ] || exit 0
 mkdir -p "$BRIDGE_DIR/wineopenxr"
 rsync -a --delete "$OUT/" "$BRIDGE_DIR/wineopenxr/"
-echo "==> installed $BRIDGE_DIR/wineopenxr; prefixes stage it on next launch"
+echo "==> installed $BRIDGE_DIR/wineopenxr; each prefix stages it on its next game launch; Steam needn't restart"
