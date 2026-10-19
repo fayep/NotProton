@@ -821,6 +821,40 @@ static void *get_winevulkan_unix_lib_handle(HMODULE hvulkan)
     return dlopen(info.dli_fname, RTLD_NOW);
 }
 
+/* No Linux OpenVR runtime to ask, so wineopenxr asks the Mac's OpenXR runtime itself. */
+static DWORD WINAPI initialize_openxr_data(void *arg)
+{
+    static const char wineopenxr_json[] = "C:\\windows\\system32\\wineopenxr64.json";
+    BOOL (CDECL *p_wineopenxr_init_registry)(void);
+    HKEY vr_key = (HKEY)arg;
+    DWORD vr_status = ~0u;
+    HMODULE hwineopenxr;
+
+    /* The run script stages wineopenxr only when an OpenXR runtime is registered */
+    if (GetFileAttributesA(wineopenxr_json) != INVALID_FILE_ATTRIBUTES)
+        RegSetKeyValueA(HKEY_LOCAL_MACHINE, "Software\\Khronos\\OpenXR\\1", "ActiveRuntime", REG_SZ,
+                wineopenxr_json, sizeof(wineopenxr_json));
+
+    if ((hwineopenxr = LoadLibraryA("wineopenxr.dll")))
+    {
+        p_wineopenxr_init_registry = reinterpret_cast<decltype(p_wineopenxr_init_registry)>
+                (GetProcAddress(hwineopenxr, "wineopenxr_init_registry"));
+        if (p_wineopenxr_init_registry && p_wineopenxr_init_registry())
+            vr_status = 1;
+        else
+            WINE_ERR("wineopenxr_init_registry failed or not found.\n");
+        FreeLibrary(hwineopenxr);
+    }
+    else
+    {
+        WINE_TRACE("Could not load wineopenxr.dll, err %u.\n", GetLastError());
+    }
+
+    set_vr_status(vr_key, vr_status);
+    RegCloseKey(vr_key);
+    return 0;
+}
+
 static DWORD WINAPI initialize_vr_data(void *arg)
 {
     int (WINAPI *p__wineopenxr_get_extensions_internal)(char **instance_extensions, char **device_extensions, uint32_t *physdev_vid, uint32_t *physdev_pid);
@@ -855,12 +889,11 @@ static DWORD WINAPI initialize_vr_data(void *arg)
 
     WINE_TRACE("Starting VR info initialization.\n");
 
+    /* A Windows OpenVR runtime in C:\vrclient, like OpenComposite, has no Linux half */
     if (!(lib_vrclient = load_vrclient()))
     {
-        WINE_ERR("Could not load libopenvr_api.so.\n");
-        set_vr_status(vr_key, ~0u);
-        RegCloseKey(vr_key);
-        return 0;
+        WINE_TRACE("Could not load libopenvr_api.so.\n");
+        return initialize_openxr_data(arg);
     }
 
     if (!(vrclient_VRClientCoreFactory = reinterpret_cast<decltype(vrclient_VRClientCoreFactory)>
@@ -1096,6 +1129,7 @@ done:
 static void setup_vr_registry(void)
 {
     WCHAR pathW[PATH_MAX];
+    BOOL have_openvr;
     LSTATUS status;
     HANDLE thread;
     HKEY vr_key;
@@ -1114,7 +1148,7 @@ static void setup_vr_registry(void)
         return;
     }
 
-    if(GetEnvironmentVariableW(PROTON_VR_RUNTIME_W, pathW, ARRAY_SIZE(pathW)))
+    if((have_openvr = GetEnvironmentVariableW(PROTON_VR_RUNTIME_W, pathW, ARRAY_SIZE(pathW))))
     {
         if ((status = RegSetValueExW(vr_key, PROTON_VR_RUNTIME_W, 0, REG_SZ,
                 (BYTE *)pathW, (lstrlenW(pathW) + 1) * sizeof(WCHAR))))
@@ -1128,9 +1162,6 @@ static void setup_vr_registry(void)
     else
     {
         WINE_TRACE("Linux OpenVR runtime is not available\n");
-        set_vr_status(vr_key, ~0u);
-        RegCloseKey(vr_key);
-        return;
     }
 
     if (!set_vr_status(vr_key, 0))
@@ -1139,7 +1170,8 @@ static void setup_vr_registry(void)
         return;
     }
 
-    if (!(thread = CreateThread(NULL, 0, initialize_vr_data, (void *)vr_key, 0, NULL)))
+    if (!(thread = CreateThread(NULL, 0, have_openvr ? initialize_vr_data : initialize_openxr_data,
+            (void *)vr_key, 0, NULL)))
     {
         WINE_ERR("Could not create thread, error %u.\n", GetLastError());
         RegCloseKey(vr_key);
