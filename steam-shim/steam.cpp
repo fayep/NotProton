@@ -821,34 +821,27 @@ static void *get_winevulkan_unix_lib_handle(HMODULE hvulkan)
     return dlopen(info.dli_fname, RTLD_NOW);
 }
 
-/* No Linux OpenVR runtime to ask, so wineopenxr asks the Mac's OpenXR runtime itself. */
+/* No Linux OpenVR runtime to ask. Asking the Mac's OpenXR runtime here would mean creating an
+ * instance in steam.exe, and a runtime may take the headset for that, so the Vulkan values are
+ * left empty: a D3D11 game doesn't use them, and wineopenxr falls back to the first adapter. */
 static DWORD WINAPI initialize_openxr_data(void *arg)
 {
     static const char wineopenxr_json[] = "C:\\windows\\system32\\wineopenxr64.json";
-    BOOL (CDECL *p_wineopenxr_init_registry)(void);
+    static const DWORD no_device = 0;
     HKEY vr_key = (HKEY)arg;
     DWORD vr_status = ~0u;
-    HMODULE hwineopenxr;
 
     /* The run script stages wineopenxr only when an OpenXR runtime is registered */
-    if (GetFileAttributesA(wineopenxr_json) != INVALID_FILE_ATTRIBUTES)
-        RegSetKeyValueA(HKEY_LOCAL_MACHINE, "Software\\Khronos\\OpenXR\\1", "ActiveRuntime", REG_SZ,
-                wineopenxr_json, sizeof(wineopenxr_json));
-
-    if ((hwineopenxr = LoadLibraryA("wineopenxr.dll")))
-    {
-        p_wineopenxr_init_registry = reinterpret_cast<decltype(p_wineopenxr_init_registry)>
-                (GetProcAddress(hwineopenxr, "wineopenxr_init_registry"));
-        if (p_wineopenxr_init_registry && p_wineopenxr_init_registry())
-            vr_status = 1;
-        else
-            WINE_ERR("wineopenxr_init_registry failed or not found.\n");
-        FreeLibrary(hwineopenxr);
-    }
+    if (GetFileAttributesA(wineopenxr_json) != INVALID_FILE_ATTRIBUTES
+            && !RegSetKeyValueA(HKEY_LOCAL_MACHINE, "Software\\Khronos\\OpenXR\\1", "ActiveRuntime", REG_SZ,
+                    wineopenxr_json, sizeof(wineopenxr_json))
+            && !RegSetValueExA(vr_key, "openxr_vulkan_instance_extensions", 0, REG_SZ, (const BYTE *)"", 1)
+            && !RegSetValueExA(vr_key, "openxr_vulkan_device_extensions", 0, REG_SZ, (const BYTE *)"", 1)
+            && !RegSetValueExA(vr_key, "openxr_vulkan_device_vid", 0, REG_DWORD, (const BYTE *)&no_device, sizeof(no_device))
+            && !RegSetValueExA(vr_key, "openxr_vulkan_device_pid", 0, REG_DWORD, (const BYTE *)&no_device, sizeof(no_device)))
+        vr_status = 1;
     else
-    {
-        WINE_TRACE("Could not load wineopenxr.dll, err %u.\n", GetLastError());
-    }
+        WINE_TRACE("No OpenXR runtime staged.\n");
 
     set_vr_status(vr_key, vr_status);
     RegCloseKey(vr_key);
