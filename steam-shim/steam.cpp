@@ -394,7 +394,10 @@ static std::string get_linux_vr_path(void)
     if(e && *e)
         return std::string(e) + openvr_path;
 
+    /* CrossOver moves the Mac's HOME to WINE_HOST_HOME */
     e = getenv("HOME");
+    if(!e || !*e)
+        e = getenv("WINE_HOST_HOME");
     if(e && *e)
         return std::string(e) + "/.config" + openvr_path;
 
@@ -598,7 +601,7 @@ static bool convert_linux_vrpaths(void)
         return false;
     }
 
-    WCHAR *linux_vrpathsW = str_to_wchar(linux_vrpaths);
+    WCHAR *linux_vrpathsW = wine_get_dos_file_name(linux_vrpaths.c_str());
     if(!linux_vrpathsW)
         return false;
 
