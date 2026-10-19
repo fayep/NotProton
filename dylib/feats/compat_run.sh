@@ -1398,6 +1398,34 @@ link_vrclient() {
 }
 [ -z "$WINEPREFIX" ] || link_vrclient
 
+# wineopenxr connects OpenXR games to the OpenXR runtime registered on the Mac. Its unix half
+# is arm64, so it's only staged on the FEX runner. steam.exe points the Khronos loader at the
+# json in system32.
+place_wineopenxr() {
+  cmp -s "$wox_src/$1" "$2/${1##*/}" && return 0
+  cp -fp "$wox_src/$1" "$2/" 2>> "$log" || echo "=== could not copy wineopenxr's $1 to $2 ===" >> "$log" 2>&1 || true
+}
+stage_wineopenxr() {
+  wox_src="$bridge_src/wineopenxr"
+  sys32="$WINEPREFIX/drive_c/windows/system32"
+  xr_runtime="${XR_RUNTIME_JSON:-${XDG_CONFIG_HOME:-$HOME/.config}/openxr/1/active_runtime.json}"
+  [ -f "$wox_src/x86_64-windows/wineopenxr.dll" ] && [ "${wine_unix##*/}" = aarch64-unix ] || return 0
+  if [ ! -f "$xr_runtime" ]; then
+    rm -f "$prefix_steam/aarch64-windows/wineopenxr.dll" "$prefix_steam/aarch64-unix/wineopenxr.so" \
+      "$prefix_steam/aarch64-unix/libopenxr_loader.dylib"
+    cmp -s "$wox_src/wineopenxr64.json" "$sys32/wineopenxr64.json" && rm -f "$sys32/wineopenxr64.json"
+    return 0
+  fi
+  mkdir -p "$prefix_steam/aarch64-windows" "$prefix_steam/aarch64-unix"
+  place_wineopenxr x86_64-windows/wineopenxr.dll "$prefix_steam/aarch64-windows"
+  place_wineopenxr aarch64-unix/wineopenxr.so "$prefix_steam/aarch64-unix"
+  place_wineopenxr aarch64-unix/libopenxr_loader.dylib "$prefix_steam/aarch64-unix"
+  place_wineopenxr x86_64-windows/wineopenxr.dll "$sys32"
+  place_wineopenxr wineopenxr64.json "$sys32"
+  printf 'vr: wineopenxr staged for %s\n' "$xr_runtime" >> "$log" 2>&1 || true
+}
+[ -z "$WINEPREFIX" ] || [ ! -d "$prefix_steam" ] || stage_wineopenxr
+
 export WINEDEBUG="${WINEDEBUG:-err+all,fixme-all}"
 exec 8>&-
 trap - EXIT
