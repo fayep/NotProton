@@ -1377,6 +1377,27 @@ if [ -d "$bridge_src" ] && [ -n "$WINEPREFIX" ]; then
   echo "STEAM_COMPAT_CLIENT_INSTALL_PATH=$STEAM_COMPAT_CLIENT_INSTALL_PATH" >> "$log" 2>&1 || true
 fi
 
+# steam.exe points games at C:\vrclient for the OpenVR runtime registered in openvrpaths.vrpath.
+# A runtime with its own Windows vrclient, like OpenComposite, is linked there.
+link_vrclient() {
+  vrclient="$WINEPREFIX/drive_c/vrclient"
+  vrpaths="${VR_PATHREG_OVERRIDE:-${XDG_CONFIG_HOME:-$HOME/.config}/openvr/openvrpaths.vrpath}"
+  vr_runtime="$VR_OVERRIDE"
+  if [ -z "$vr_runtime" ] && [ -f "$vrpaths" ]; then
+    vr_runtime=$(plutil -extract runtime.0 raw -o - "$vrpaths" 2>/dev/null) || vr_runtime=""
+  fi
+  if [ -n "$vr_runtime" ] && [ -f "$vr_runtime/bin/win64/vrclient_x64.dll" ]; then
+    # A real C:\vrclient folder belongs to someone else.
+    if [ -L "$vrclient" ] || [ ! -e "$vrclient" ]; then
+      ln -sfn "$vr_runtime" "$vrclient"
+      printf 'vr: C:\\vrclient is %s\n' "$vr_runtime" >> "$log" 2>&1 || true
+    fi
+  elif [ -L "$vrclient" ]; then
+    rm -f "$vrclient"
+  fi
+}
+[ -z "$WINEPREFIX" ] || link_vrclient
+
 export WINEDEBUG="${WINEDEBUG:-err+all,fixme-all}"
 exec 8>&-
 trap - EXIT
