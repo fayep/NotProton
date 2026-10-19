@@ -7,9 +7,10 @@
 # whichever runtime XR_RUNTIME_JSON or the user's ~/.config/openxr/1/active_runtime.json names.
 #
 # Usage:
-#   ./build.sh          build both halves into build/wineopenxr-out
+#   ./build.sh            build both halves into build/wineopenxr-out
+#   ./build.sh --install  also install to the bridge, which the run script stages from
 #
-# Overridable: WINE_BUILD, WINE_SRC_REL, UNIX_ARCH, MIN_VER, CX_ROOT, OPENXR_LOADER
+# Overridable: WINE_BUILD, WINE_SRC_REL, UNIX_ARCH, MIN_VER, CX_ROOT, OPENXR_LOADER, BRIDGE_DIR
 
 set -eu
 
@@ -23,6 +24,9 @@ MIN_VER=${MIN_VER:-15.0}
 TREE=${TREE:-$repo/build/wineopenxr}
 OUT=${OUT:-$repo/build/wineopenxr-out}
 OPENXR_LOADER=${OPENXR_LOADER:-$HOME/Source/OpenXR-SDK-Source/build/src/loader/libopenxr_loader.dylib}
+BRIDGE_DIR=${BRIDGE_DIR:-$HOME/Library/Application Support/notproton/bridge}
+install=0
+[ "${1:-}" = "--install" ] && install=1
 case "$UNIX_ARCH" in
 	x86_64) unix_dir=x86_64-unix ;;
 	arm64) unix_dir=aarch64-unix ;;
@@ -83,3 +87,8 @@ cp "$so" "$OPENXR_LOADER" "$OUT/$unix_dir/"
 cp "$src/wineopenxr64.json" "$OUT/"
 echo "==> built into $OUT"
 ls -la "$OUT"/*
+
+[ "$install" -eq 1 ] || exit 0
+mkdir -p "$BRIDGE_DIR/wineopenxr"
+rsync -a --delete "$OUT/" "$BRIDGE_DIR/wineopenxr/"
+echo "==> installed $BRIDGE_DIR/wineopenxr; prefixes stage it on next launch"
